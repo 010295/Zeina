@@ -1,0 +1,171 @@
+import streamlit as st
+import pandas as pd 
+import numpy as np 
+import matplotlib.pyplot as plt 
+import seaborn as sns 
+import plotly.express as px
+
+st.title("Initialisation à la Dataviz avec Stramlit")
+st.subheader("Auteur: Zeina")
+st.markdown("***Cette application affiche différents types de graphiques***")
+
+#Importation de données
+
+df_impressions=pd.read_csv("impressions.csv")
+
+# convert timestamp to date and create new column named 'date_impression'
+df_impressions['date_impression'] = pd.to_datetime(df_impressions['timestamp'], unit='s')
+print(f"Data impressions shape: {df_impressions.shape}")
+st.write("df_impressions")
+st.dataframe(df_impressions)
+
+df_achats=pd.read_csv("achats.csv")
+# convert timestamp to date and create new column named 'date'
+df_achats['date_achat'] = pd.to_datetime(df_achats['timestamp'], unit='s')
+print(f"Data achat shape: {df_achats.shape}")
+st.write("df_achats")
+st.dataframe(df_achats)
+
+
+df_clics=pd.read_csv("clics.csv")
+# convert timestamp to date and create new column named 'date_clic'
+df_clics['date_clic'] = pd.to_datetime(df_clics['timestamp'], unit='s')
+print(f"Data clics shape: {df_clics.shape}")
+st.write("df_clics")
+st.dataframe(df_clics)
+
+
+
+
+
+
+
+
+
+
+
+data = (df_impressions
+        #add clic on impressions that have this action
+        .merge(df_clics.drop("timestamp", axis=1), how="left", on="cookie_id")
+         #add clic on impressions that have this action
+        .merge(df_achats.drop("timestamp", axis=1), how="left", on="cookie_id")
+        .assign(is_clic=lambda dfr: dfr.date_clic.notnull(),
+                is_achat=lambda dfr: dfr.date_achat.notnull(),
+               )
+       )
+st.write("data")
+st.dataframe(data)
+
+
+ca_per_campaign = data.groupby("campaign_id", as_index=False).agg(ca=("price", "sum"))
+st.write("Chiffre d'affaire par campagne")
+st.dataframe(ca_per_campaign.head())
+
+
+fig1=px.bar(data_frame=ca_per_campaign, x="campaign_id", y="ca",
+       text_auto=True,
+       title="Chiffre d'affaire par campagne",
+       width=500,
+       height=400,
+      )
+
+st.plotly_chart(fig1)
+
+
+#Nombre de clics
+nb_clics_per_hour = (data
+                     .groupby(["campaign_id", pd.Grouper(key="date_clic", freq="D")])
+                     .agg(nb_clics= ("is_clic", "sum"))
+                     .reset_index(drop=False)
+                    )
+st.write("Nombre de clics")
+st.dataframe(nb_clics_per_hour.head())
+
+fig2 = px.line(data_frame=(nb_clics_per_hour
+                          .groupby("date_clic", as_index=False)
+                          .agg(nb_total_clics=("nb_clics", "sum"))
+                         ),
+              x='date_clic', y="nb_total_clics",
+             title="Nombre total de clics par jour")
+st.plotly_chart(fig2)
+
+
+# clic per date & campaign
+fig3 = px.bar(nb_clics_per_hour,
+             x="date_clic", y="nb_clics", animation_frame="campaign_id",
+             text_auto=True, height=500, width=900,
+             title="Clics par jour et par campagne"
+            )
+st.plotly_chart(fig3)
+
+
+
+#Genre
+data_gender = data.groupby(["product_id", "gender"], as_index=False).agg(nb_count=("cookie_id", "count"))
+st.write("Genre")
+st.dataframe(data_gender.head(5))
+
+fig4=px.bar(data_gender, x="product_id", y="nb_count",
+       color="gender", barmode="relative",  # group
+       hover_name="product_id", text_auto=True,
+       title="Product vs Gender")
+
+st.plotly_chart(fig4)
+
+
+best_products = (data
+                 .groupby("product_id", as_index=False, dropna=True)
+                 .agg(nb_achats=("is_achat", "sum"),
+                  )
+                 .nlargest(10, columns=["nb_achats"])
+             )
+st.write("Meilleurs produits vendus")
+st.dataframe(best_products)
+
+
+fig5 = px.pie(data_frame=best_products, names="product_id", values="nb_achats",
+             hole=.3, width=400,
+            )
+fig5.update_traces(textinfo='value+percent',
+                  # textfont_size=10,
+                 )
+st.write("Meilleurs produits")
+st.plotly_chart(fig5)
+
+
+
+
+
+
+
+
+
+
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import JSONResponse
+app = FastAPI()
+
+
+
+@app.get("/dataframe", response_class=JSONResponse)
+async def get_data():
+    # Convertir les objets Timestamp, NaT et valeurs float en chaînes de texte pour la sérialisation JSON
+    df_json = data.replace({pd.NaT: None}).applymap(lambda x: str(x) if isinstance(x, (pd.Timestamp, float)) else x).to_dict(orient='records')
+
+    return JSONResponse(content=df_json)
+
+
+# Nouvel endpoint pour obtenir les données relatives à une campagne spécifique
+@app.get("/get_data_campaign/{campaign_id}", response_class=JSONResponse)
+async def get_data_campaign(campaign_id: int):
+    # Filtrer le DataFrame pour obtenir les données relatives à la campagne spécifiée
+    campaign_df = data[data['campaign_id'] == campaign_id]
+
+    if campaign_df.empty:
+        raise HTTPException(status_code=404, detail="Campagne non trouvée")
+
+
+# Convertir les objets Timestamp, NaT et valeurs float en chaînes de texte pour la sérialisation JSON
+    campaign_json = campaign_df.replace({pd.NaT: None}).applymap(lambda x: str(x) if isinstance(x, (pd.Timestamp, float)) else x).to_dict(orient='records')
+
+    return JSONResponse(content=campaign_json)
